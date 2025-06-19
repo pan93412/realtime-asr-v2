@@ -8,10 +8,10 @@ from transformers import WhisperProcessor, WhisperForConditionalGeneration
 from transformers.pipelines.automatic_speech_recognition import AutomaticSpeechRecognitionPipeline
 
 def record_audio_with_silence_detection(
-    silence_threshold=0.01,
-    silence_duration=2.0,
+    silence_threshold=0.035,
+    silence_duration=1.0,
     sample_rate=16000,
-    chunk_size=1024
+    chunk_size=512
 ):
     """
     Record audio from microphone with silence detection.
@@ -36,8 +36,8 @@ def record_audio_with_silence_detection(
         frames_per_buffer=chunk_size
     )
     
-    print("Recording... Speak now!")
-    print("Recording will stop after", silence_duration, "seconds of silence")
+    print("🎤 Recording... Speak now!")
+    print(f"⏱️  Will stop after {silence_duration} seconds of silence")
     
     frames = []
     silent_chunks = 0
@@ -61,7 +61,7 @@ def record_audio_with_silence_detection(
                 break
                 
     except KeyboardInterrupt:
-        print("\nRecording stopped by user")
+        print("\n⏹️  Recording stopped by user")
     finally:
         stream.stop_stream()
         stream.close()
@@ -69,36 +69,73 @@ def record_audio_with_silence_detection(
     
     # Combine all frames
     audio = np.concatenate(frames)
-    print(f"Recorded {len(audio) / sample_rate:.2f} seconds of audio")
+    duration = len(audio) / sample_rate
     
+    # Only process if we have meaningful audio (more than 0.5 seconds)
+    if duration < 0.5:
+        print("⚠️  Audio too short, skipping...")
+        return None
+    
+    print(f"✅ Recorded {duration:.2f} seconds of audio")
     return audio
 
-# 1. Record audio from microphone
-print("Starting microphone recording...")
-waveform = record_audio_with_silence_detection()
-sample_rate = 16000
+def main():
+    print("🚀 Starting Real-Time ASR with Microphone Input")
+    print("Press Ctrl+C to exit")
+    print("-" * 50)
+    
+    # Load model and processor once (outside the loop for efficiency)
+    print("📥 Loading ASR model...")
+    processor = WhisperProcessor.from_pretrained("MediaTek-Research/Breeze-ASR-25")
+    
+    model = WhisperForConditionalGeneration.from_pretrained("MediaTek-Research/Breeze-ASR-25")
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    model = model.to(device)
+    model = model.eval()
+    
+    # Build pipeline once using the processor directly
+    asr_pipeline = AutomaticSpeechRecognitionPipeline(
+        model=model,
+        tokenizer=processor.tokenizer,
+        feature_extractor=processor.feature_extractor,
+        chunk_length_s=0
+    )
+    
+    print(f"✅ Model loaded on {device}")
+    print("-" * 50)
+    
+    try:
+        while True:
+            # Record audio
+            waveform = record_audio_with_silence_detection()
+            
+            if waveform is None:
+                continue
+            
+            # Process audio
+            print("🔄 Processing audio...")
+            start_time = time.time()
+            
+            output = asr_pipeline(waveform, return_timestamps=False)
+            
+            processing_time = time.time() - start_time
+            
+            # Display results
+            if isinstance(output, dict) and "text" in output:
+                result_text = output["text"].strip()
+                if result_text:
+                    print(f"🎯 Result ({processing_time:.2f}s): {result_text}")
+                else:
+                    print("❌ No speech detected")
+            else:
+                print("❌ No speech detected")
+            
+            print("-" * 50)
+            
+    except KeyboardInterrupt:
+        print("\n👋 Goodbye!")
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
-# 2. Preprocess (waveform is already mono and at correct sample rate)
-waveform = waveform.squeeze()
-
-# 3. Load Model
-processor = WhisperProcessor.from_pretrained("MediaTek-Research/Breeze-ASR-25")
-assert isinstance(processor, WhisperProcessor), "processor is not a WhisperProcessor"
-
-model = WhisperForConditionalGeneration.from_pretrained("MediaTek-Research/Breeze-ASR-25")
-model = model.to("mps" if torch.backends.mps.is_available() else "cpu")
-model = model.eval()
-assert isinstance(model, WhisperForConditionalGeneration), "model is not a WhisperForConditionalGeneration"
-
-# 4. Build Pipeline
-asr_pipeline = AutomaticSpeechRecognitionPipeline(
-    model=model,
-    tokenizer=processor.tokenizer,
-    feature_extractor=processor.feature_extractor,
-    chunk_length_s=0
-)
-
-# 5. Inference
-output = asr_pipeline(waveform, return_timestamps=True)  
-assert isinstance(output, dict), "output is not a dict"
-print("Result:", output["text"])
+if __name__ == "__main__":
+    main()

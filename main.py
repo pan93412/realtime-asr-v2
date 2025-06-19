@@ -1,20 +1,17 @@
-import torchaudio
-import torch
 import pyaudio
 import numpy as np
-import wave
 import time
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-from transformers.pipelines.automatic_speech_recognition import AutomaticSpeechRecognitionPipeline
+import torch
+from faster_whisper import WhisperModel
 
-def record_audio_with_silence_detection(
+def stream_audio_with_faster_whisper(
     silence_threshold=0.035,
     silence_duration=1.0,
     sample_rate=16000,
-    chunk_size=512
+    chunk_size=1024
 ):
     """
-    Record audio from microphone with silence detection.
+    Stream audio from microphone with faster-whisper for real-time ASR.
     
     Args:
         silence_threshold: Threshold for silence detection (0-1)
@@ -23,7 +20,7 @@ def record_audio_with_silence_detection(
         chunk_size: Number of frames per buffer
     
     Returns:
-        numpy array of recorded audio
+        Generator yielding (audio_chunk, is_silent, should_stop)
     """
     p = pyaudio.PyAudio()
     
@@ -36,10 +33,9 @@ def record_audio_with_silence_detection(
         frames_per_buffer=chunk_size
     )
     
-    print("🎤 Recording... Speak now!")
-    print(f"⏱️  Will stop after {silence_duration} seconds of silence")
+    print("🎤 Streaming with Faster-Whisper... Speak now!")
+    print(f"⏱️  Will process after {silence_duration} seconds of silence")
     
-    frames = []
     silent_chunks = 0
     silence_threshold_chunks = int(silence_duration * sample_rate / chunk_size)
     
@@ -49,88 +45,85 @@ def record_audio_with_silence_detection(
             audio_data = np.frombuffer(data, dtype=np.float32)
             
             # Check if this chunk is silent
-            if np.max(np.abs(audio_data)) < silence_threshold:
+            is_silent = np.max(np.abs(audio_data)) < silence_threshold
+            
+            if is_silent:
                 silent_chunks += 1
             else:
                 silent_chunks = 0
             
-            frames.append(audio_data)
+            should_stop = silent_chunks >= silence_threshold_chunks
+            
+            # Yield current state
+            yield audio_data, is_silent, should_stop
             
             # Stop if we've had enough silence
-            if silent_chunks >= silence_threshold_chunks:
+            if should_stop:
                 break
                 
     except KeyboardInterrupt:
-        print("\n⏹️  Recording stopped by user")
+        print("\n⏹️  Streaming stopped by user")
     finally:
         stream.stop_stream()
         stream.close()
         p.terminate()
-    
-    # Combine all frames
-    audio = np.concatenate(frames)
-    duration = len(audio) / sample_rate
-    
-    # Only process if we have meaningful audio (more than 0.5 seconds)
-    if duration < 0.5:
-        print("⚠️  Audio too short, skipping...")
-        return None
-    
-    print(f"✅ Recorded {duration:.2f} seconds of audio")
-    return audio
 
 def main():
-    print("🚀 Starting Real-Time ASR with Microphone Input")
+    print("🚀 Starting Real-Time ASR with Faster-Whisper")
     print("Press Ctrl+C to exit")
     print("-" * 50)
     
-    # Load model and processor once (outside the loop for efficiency)
-    print("📥 Loading ASR model...")
-    processor = WhisperProcessor.from_pretrained("MediaTek-Research/Breeze-ASR-25")
-    
-    model = WhisperForConditionalGeneration.from_pretrained("MediaTek-Research/Breeze-ASR-25")
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    model = model.to(device)
-    model = model.eval()
-    
-    # Build pipeline once using the processor directly
-    asr_pipeline = AutomaticSpeechRecognitionPipeline(
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        chunk_length_s=0
+    # Load faster-whisper model (much faster than transformers)
+    print("📥 Loading Faster-Whisper model...")
+    model = WhisperModel(
+        "base",  # or "small", "medium", "large" for different sizes
+        device="mps" if torch.backends.mps.is_available() else "cpu",
+        compute_type="float16"  # Use float16 for faster inference
     )
     
-    print(f"✅ Model loaded on {device}")
+    print("✅ Model loaded")
     print("-" * 50)
     
     try:
         while True:
-            # Record audio
-            waveform = record_audio_with_silence_detection()
+            print("🎤 Starting new recording session...")
             
-            if waveform is None:
-                continue
+            # Collect audio chunks
+            audio_chunks = []
             
-            # Process audio
-            print("🔄 Processing audio...")
-            start_time = time.time()
-            
-            output = asr_pipeline(waveform, return_timestamps=False)
-            
-            processing_time = time.time() - start_time
-            
-            # Display results
-            if isinstance(output, dict) and "text" in output:
-                result_text = output["text"].strip()
-                if result_text:
-                    print(f"🎯 Result ({processing_time:.2f}s): {result_text}")
-                else:
-                    print("❌ No speech detected")
-            else:
-                print("❌ No speech detected")
-            
-            print("-" * 50)
+            # Stream audio
+            for audio_chunk, is_silent, should_stop in stream_audio_with_faster_whisper():
+                audio_chunks.append(audio_chunk)
+                
+                # Process when we detect silence
+                if should_stop and len(audio_chunks) > 0:
+                    print("🔄 Processing audio...")
+                    start_time = time.time()
+                    
+                    # Combine all chunks
+                    audio = np.concatenate(audio_chunks)
+                    
+                    # Process with faster-whisper (much faster!)
+                    segments, info = model.transcribe(
+                        audio,
+                        beam_size=5,
+                        language="zh",  # or None for auto-detection
+                        vad_filter=True,  # Voice Activity Detection
+                        vad_parameters=dict(min_silence_duration_ms=500)
+                    )
+                    
+                    processing_time = time.time() - start_time
+                    
+                    # Display results
+                    results = list(segments)
+                    if results:
+                        for segment in results:
+                            print(f"🎯 Result ({processing_time:.2f}s): {segment.text.strip()}")
+                    else:
+                        print("❌ No speech detected")
+                    
+                    print("-" * 50)
+                    break
             
     except KeyboardInterrupt:
         print("\n👋 Goodbye!")

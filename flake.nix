@@ -24,7 +24,7 @@
        * present. For safety, removal should
        * be a manual step, even if trivial.
        */
-      version = "3.13";
+      version = "3.12";
     in
     {
       devShells = forEachSupportedSystem ({ pkgs }:
@@ -67,7 +67,12 @@
               venvShellHook
 
               pip
-              uv
+
+              pkgs.portaudio
+
+              python.pkgs.faster-whisper
+              python.pkgs.whisperx
+              python.pkgs.pyaudio
 
               /* Add whatever else you'd like here. */
               # pkgs.basedpyright

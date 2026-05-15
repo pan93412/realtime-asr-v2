@@ -24,6 +24,7 @@ On Apple Silicon, inference runs on the MPS backend. On other machines it falls 
 ## Usage
 
 ```bash
+uv sync
 uv run python3 main.py
 ```
 

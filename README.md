@@ -1,6 +1,6 @@
 # realtime-asr-v2
 
-A real-time Automatic Speech Recognition (ASR) experiment built for [Cursor Meetup Taipei](https://lu.ma/cursor-meetup-taipei) (June 2025), originally intended to power bilingual subtitles during the talk.
+A real-time Automatic Speech Recognition (ASR) experiment built for [Cursor Meetup Taipei](https://luma.com/jdxwyx1j) (June 2025), originally intended to power bilingual subtitles during the talk.
 
 This is the second iteration. v1 was built on Google Cloud Speech-to-Text and Google Translation APIs. v2 replaces the cloud pipeline with [MediaTek Research's Breeze-ASR-25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25), a Whisper-based model fine-tuned for Mandarin and Taiwanese Hokkien. In concept it is similar to [Typeless](https://www.typeless.com/) — audio in, transcript out — but without any downstream cleanup model.
 
